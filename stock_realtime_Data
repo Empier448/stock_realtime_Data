@@ -1,0 +1,124 @@
+from selenium import webdriver
+from webdriver_manager.chrome import ChromeDriverManager
+import pandas as pd
+from pathlib import Path
+import yfinance as yf
+from openpyxl import Workbook
+from datetime import datetime
+
+
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+
+# สร้าง ChromeService และใช้ executable_path ของ chromedriver
+service = Service(executable_path=ChromeDriverManager().install())
+options = webdriver.ChromeOptions()
+options.add_argument('--headless')
+options.add_argument('--no-sandbox')
+options.add_argument('--disable-dev-shm-usage')
+driver = webdriver.Chrome(service=service, options=options)
+
+
+
+
+
+# ตั้งค่า driver สำหรับ Chrome
+#options = webdriver.ChromeOptions()
+#options.add_argument('--headless')  # ใช้งานในโหมด headlessสั่ง (options.add_argument('--headless')) จะทำให้ browser ทำงานในโหมด headless นั่นคือ browser จะทำงานในพื้นหลังโดยไม่แสดงหน้าต่างใดๆ บนหน้าจอ ซึ่งเหมาะสำหรับการทำงานบน server หรือในสภาพแวดล้อมที่ไม่มีหน้าจอ
+#driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
+
+# ไปยังหน้าหลักของ SET
+driver.get('http://siamchart.com/stock')
+# ดึงข้อมูลหน้าเว็บ
+data = driver.page_source
+# อ่านข้อมูลตารางจากหน้าเว็บ
+data_df = pd.read_html(data)[2]
+# ทำความสะอาดชื่อคอลัมน์
+data_df.columns = [c.replace(' (Click to sort Ascending)', '') for c in data_df.columns]
+# ลบแถวแรกที่ไม่จำเป็น
+data_df.drop([0], inplace=True)
+# ตั้งค่า index
+data_df.set_index('Name', inplace=True)
+
+# ตรวจสอบว่าไดเรกทอรีที่ต้องการบันทึกไฟล์มีอยู่จริง
+output_dir = Path(r'C:/Users/Thanimwas/Downloads/Python/Data')
+output_dir.mkdir(parents=True, exist_ok=True)
+
+# ฟังก์ชันสำหรับดึงข้อมูลหุ้น
+def get_stock_data(symbol):
+    symbol += '.BK'  # เพิ่มส่วนขยาย .BK หลังรายชื่อหุ้น
+
+    try:
+        stock_info = yf.Ticker(symbol).info
+        open = stock_info.get('open', 'N/A')
+        high = stock_info.get('dayHigh', 'N/A')
+        low = stock_info.get('dayLow', 'N/A')
+        close = stock_info.get('regularMarketPreviousClose', 'N/A')
+        #price = stock_info["currentPrice"]
+        price = stock_info.get('currentPrice', 'N/A')#Adj Close =Price
+        volume = stock_info.get('volume', 'N/A')
+        pe = stock_info.get('trailingPE', 'N/A')
+        roa = stock_info.get('returnOnAssets', 'N/A')
+        roe = stock_info.get('returnOnEquity', 'N/A')
+        eps = stock_info.get('trailingEps', 'N/A')
+        #eps_actual = stock_info.get('epsActual', 'N/A')
+        #pbv = stock_info.get('priceToBook', 'N/A')
+
+       # pe2 = round(price / eps,) if eps != 'N/A' and price != 'N/A' else 'N/A'
+        #dividend_yield = stock_info.get('dividendYield','') * 100  # คูณด้วย 100 เพื่อแปลงเป็นเปอร์เซ็นต์
+        dividend_yield = stock_info.get('dividendYield', 0) * 100 if stock_info.get('dividendYield') is not None else 'N/A'
+        shares_outstanding = stock_info.get('sharesOutstanding', 'N/A')
+        book_value = stock_info.get('bookValue', 'N/A')
+        dividend_rate = stock_info.get('dividendRate', 'N/A')
+
+    # คำนวณ Dividend Yield
+        div_yield = (float(dividend_rate) / float(price)) * 100 if dividend_rate != 'N/A' and price != 'N/A' else 'N/A'
+    # คำนวณ BVPS
+        bvps = float(book_value) / float(shares_outstanding) if shares_outstanding != 'N/A' and book_value != 'N/A' else 'N/A'
+
+    # คำนวณ P/BV
+        pbv = float(close) / bvps if bvps != 'N/A' else 'N/A'
+
+        pbv2 = close /book_value   # Assuming 'BVPS' column exists
+        return [symbol,open,high,low,close,price,volume,pe,roa,roe,eps,dividend_yield,shares_outstanding,book_value,dividend_rate,div_yield,bvps,pbv,pbv2]
+    except Exception as e:
+       print(f"ไม่สามารถดึงข้อมูลสำหรับ {symbol} ได้: {e}")
+       #return [symbol,'']# 'Error']
+       return [symbol] + ['N/A']*14
+# สร้าง workbook ใหม่
+wb = Workbook()
+ws = wb.active
+ws.append(["Date","Ticker","Open","High", "Low","Close","Adj Close","Volume", "P/E", "ROA", "ROE", "EPS","Yield%","ShareOut","BookValue","dividend_rate","div_yield","BVPS","P/BV2","P/BV"])
+
+
+# รับวันที่ปัจจุบัน
+current_date = datetime.now().strftime('%Y-%m-%d')
+
+# รวบรวมข้อมูลจากทุกหุ้นและบันทึกลงใน Excel
+for stock in data_df.index:
+    stock_data = get_stock_data(stock)
+    # ตัดคำ '.BK' ออกจากสตริง symbol
+    stock_data[0] = stock_data[0].replace('.BK', '')
+    # เพิ่มวันที่ปัจจุบันไปยังข้อมูลหุ้น
+    stock_data.insert(0, current_date)
+    ws.append(stock_data)
+
+# ตั้งชื่อไฟล์พร้อมวันที่สำหรับไฟล์ Excel
+excel_file_name = f'history_EOD_{current_date}.xlsx'
+#excel_file_name = f'stocks_data_{current_date}.xlsx'
+
+# บันทึก workbook ลงในไฟล์ Excel
+wb.save(output_dir / excel_file_name)
+
+# ตั้งชื่อไฟล์พร้อมวันที่สำหรับไฟล์ CSV
+#csv_file_name = f'set-history_EOD_{current_date}.csv'
+csv_file_name = f'stocks_data_{current_date}.csv'
+# โหลดไฟล์ Excel ที่บันทึกไว้
+df = pd.read_excel(output_dir / excel_file_name)
+
+ #บันทึกข้อมูลลงในไฟล์ CSV
+df.to_csv(output_dir / csv_file_name, index=False)
+df.to_csv(output_dir /'stocks_data.csv' , index=False)
+
+print(f"ข้อมูลได้ถูกบันทึกไว้ในไฟล์ {csv_file_name}")
